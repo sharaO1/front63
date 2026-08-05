@@ -47,6 +47,120 @@ function formatMessage(t: string): string {
   return s;
 }
 
+function renderInlineMarkdown(text: string) {
+  return text
+    .split(/(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g)
+    .map((part, index) => {
+      if (/^\*\*[^*]+\*\*$/.test(part) || /^__[^_]+__$/.test(part)) {
+        return <strong key={index}>{part.slice(2, -2)}</strong>;
+      }
+      if (/^`[^`]+`$/.test(part)) {
+        return (
+          <code key={index} className="rounded bg-muted px-1 py-0.5 text-[0.9em]">
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      if (/^\*[^*]+\*$/.test(part) || /^_[^_]+_$/.test(part)) {
+        return <em key={index}>{part.slice(1, -1)}</em>;
+      }
+      if (/^~~[^~]+~~$/.test(part)) {
+        return <del key={index}>{part.slice(2, -2)}</del>;
+      }
+      const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+      if (link) {
+        return (
+          <a
+            key={index}
+            href={link[2]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline underline-offset-2"
+          >
+            {link[1]}
+          </a>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+}
+
+function renderMarkdownText(text: string) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const nodes: JSX.Element[] = [];
+  let codeLines: string[] = [];
+  let codeStart = 0;
+
+  const pushCodeBlock = (index: number) => {
+    nodes.push(
+      <pre key={`code-${codeStart}`} className="my-2 overflow-x-auto rounded-md bg-muted p-3 text-xs">
+        <code>{codeLines.join("\n")}</code>
+      </pre>,
+    );
+    codeLines = [];
+    if (index < lines.length - 1) nodes.push(<br key={`code-break-${index}`} />);
+  };
+
+  lines.forEach((line, index) => {
+    if (line.trim().startsWith("```")) {
+      if (codeLines.length === 0) {
+        codeStart = index;
+        codeLines = ["__OPEN__"];
+      } else {
+        codeLines.shift();
+        pushCodeBlock(index);
+      }
+      return;
+    }
+
+    if (codeLines.length > 0) {
+      codeLines.push(line);
+      return;
+    }
+
+    const heading = line.match(/^#{1,6}\s+(.+)$/);
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    const bullet = line.match(/^(\s*)[-*+]\s+(.+)$/);
+    const ordered = line.match(/^(\s*)\d+[.)]\s+(.+)$/);
+
+    if (heading) {
+      nodes.push(
+        <strong key={`line-${index}`} className="block mt-2 first:mt-0">
+          {renderInlineMarkdown(heading[1])}
+        </strong>,
+      );
+    } else if (quote) {
+      nodes.push(
+        <span key={`line-${index}`} className="block border-l-2 border-primary/50 pl-3 italic text-muted-foreground">
+          {renderInlineMarkdown(quote[1])}
+        </span>,
+      );
+    } else if (bullet || ordered) {
+      const match = bullet || ordered;
+      const indent = Math.min(12, Math.floor(match![1].length / 2) * 4);
+      nodes.push(
+        <span key={`line-${index}`} className="flex gap-2" style={{ paddingLeft: indent }}>
+          <span>{ordered ? `${index + 1}.` : "•"}</span>
+          <span>{renderInlineMarkdown(match![2])}</span>
+        </span>,
+      );
+    } else {
+      nodes.push(
+        <span key={`line-${index}`}>{renderInlineMarkdown(line)}</span>,
+      );
+    }
+
+    if (index < lines.length - 1) nodes.push(<br key={`break-${index}`} />);
+  });
+
+  if (codeLines.length > 0) {
+    codeLines.shift();
+    pushCodeBlock(lines.length - 1);
+  }
+
+  return nodes;
+}
+
 // Try to extract a JSON object/array from text (plain or fenced code block)
 function extractJsonFromText(text: string): any | null {
   if (!text) return null;
@@ -173,7 +287,7 @@ function renderMessageContent(text: string) {
       </div>
     );
   }
-  return <>{formatMessage(text)}</>;
+  return <>{renderMarkdownText(text)}</>;
 }
 
 function getInitials(name?: string | null, email?: string | null) {
@@ -514,6 +628,9 @@ export default function AIChat({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter") {
+      // Enter creates a new line on mobile; desktop Enter submits.
+      if (isMobile && !e.ctrlKey && !e.metaKey && !e.shiftKey) return;
+
       // Ctrl+Enter or Cmd+Enter: insert new line
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
@@ -650,13 +767,13 @@ export default function AIChat({
         >
           <Card
             className={cn(
-              "border-0 shadow-lg overflow-hidden",
+              "border-0 shadow-lg overflow-hidden flex flex-col",
               page
                 ? isFullScreen
-                  ? "h-screen w-screen rounded-none"
+                  ? "h-[100dvh] w-screen rounded-none"
                   : "h-[100dvh] w-screen rounded-none"
                 : isFullScreen
-                  ? "h-screen w-screen rounded-none"
+                  ? "h-[100dvh] w-screen rounded-none"
                   : variant === "floating"
                     ? "w-[min(92vw,384px)] sm:w-[384px] h-[560px] rounded-3xl"
                     : cn("w-full", height, "rounded-3xl"),
@@ -723,12 +840,12 @@ export default function AIChat({
               </div>
             </CardHeader>
 
-            <CardContent className="p-0 h-full">
-              <div className="flex h-full flex-col overflow-hidden">
+            <CardContent className="p-0 flex-1 min-h-0">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden">
                 <div className="h-2 bg-gradient-to-b from-transparent to-black/0 dark:to-white/0" />
                 <div
                   ref={listRef}
-                  className="flex-1 overflow-y-auto overscroll-contain pt-[76px] px-[11px] pb-0 space-y-3 bg-gradient-to-b from-white to-gray-50 dark:from-gray-900 dark:to-gray-950"
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain pt-3 px-[11px] pb-0 space-y-3 bg-gradient-to-b from-white to-gray-50 dark:from-gray-900 dark:to-gray-950"
                   style={{
                     WebkitOverflowScrolling: "touch",
                     overscrollBehavior: "contain",
@@ -758,9 +875,7 @@ export default function AIChat({
                             : "bg-white dark:bg-gray-800 border rounded-bl-md",
                         )}
                       >
-                        {m.role === "ai"
-                          ? renderMessageContent(m.text)
-                          : formatMessage(m.text)}
+                        {m.role === "ai" ? renderMessageContent(m.text) : m.text}
                       </div>
                       {m.role === "user" && (
                         <Avatar className="mt-1 h-8 w-8">
@@ -798,7 +913,7 @@ export default function AIChat({
 
                 <div
                   className={cn(
-                    "border-t bg-background py-5 px-3",
+                    "flex-none border-t bg-background py-5 px-3",
                     containerFixed ? "sticky bottom-0" : "",
                   )}
                   style={
